@@ -5,10 +5,10 @@
 *   This example has been created using raylib 2.5 (www.raylib.com)
 *   raylib is licensed under an unmodified zlib/libpng license (View raylib.h for details)
 *
-*   Example contributed by Chris Camacho (@codifies -  http://bedroomcoders.co.uk/) 
+*   Example contributed by Chris Camacho (@chriscamacho -  http://bedroomcoders.co.uk/) 
 *   and reviewed by Ramon Santamaria (@raysan5)
 *
-*   Copyright (c) 2019 Chris Camacho (@codifies) and Ramon Santamaria (@raysan5)
+*   Copyright (c) 2019 Chris Camacho (@chriscamacho) and Ramon Santamaria (@raysan5)
 *
 ********************************************************************************************
 *
@@ -93,7 +93,7 @@ int main(void)
 
        
     // Use default vert shader
-    Shader spotShader = LoadShader(0, FormatText("resources/shaders/glsl%i/spotlight.fs", GLSL_VERSION));
+    Shader spotShader = LoadShader(0, TextFormat("resources/shaders/glsl%i/spotlight.fs", GLSL_VERSION));
     
 	// Get the locations of spots in the shader
 	Spot spots[MAXSPOT];

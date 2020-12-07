@@ -619,7 +619,7 @@ void DrawRectangleRec(Rectangle rec, Color color)
 void DrawRectanglePro(Rectangle rec, Vector2 origin, float rotation, Color color)
 {
     if (rlCheckBufferLimit(4)) rlglDraw();
-    
+
     rlEnableTexture(GetShapesTexture().id);
 
     rlPushMatrix();
@@ -1178,13 +1178,15 @@ void DrawRectangleRoundedLines(Rectangle rec, float roundness, int segments, int
                     angle += stepLength;
                 }
             }
+
             // And now the remaining 4 lines
-            for(int i = 0; i < 8; i += 2)
+            for (int i = 0; i < 8; i += 2)
             {
                 rlColor4ub(color.r, color.g, color.b, color.a);
                 rlVertex2f(point[i].x, point[i].y);
                 rlVertex2f(point[i + 1].x, point[i + 1].y);
             }
+
         rlEnd();
     }
 }
@@ -1246,6 +1248,7 @@ void DrawTriangleLines(Vector2 v1, Vector2 v2, Vector2 v3, Color color)
 
 // Draw a triangle fan defined by points
 // NOTE: First vertex provided is the center, shared by all triangles
+// By default, following vertex should be provided in counter-clockwise order
 void DrawTriangleFan(Vector2 *points, int pointsCount, Color color)
 {
     if (pointsCount >= 3)

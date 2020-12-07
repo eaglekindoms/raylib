@@ -204,8 +204,10 @@ unsigned char *LoadFileData(const char *fileName, unsigned int *bytesRead)
 }
 
 // Save data to file from buffer
-void SaveFileData(const char *fileName, void *data, unsigned int bytesToWrite)
+bool SaveFileData(const char *fileName, void *data, unsigned int bytesToWrite)
 {
+    bool success = false;
+    
     if (fileName != NULL)
     {
         FILE *file = fopen(fileName, "wb");
@@ -218,11 +220,14 @@ void SaveFileData(const char *fileName, void *data, unsigned int bytesToWrite)
             else if (count != bytesToWrite) TRACELOG(LOG_WARNING, "FILEIO: [%s] File partially written", fileName);
             else TRACELOG(LOG_INFO, "FILEIO: [%s] File saved successfully", fileName);
 
-            fclose(file);
+            int result = fclose(file);
+            if (result == 0) success = true;
         }
         else TRACELOG(LOG_WARNING, "FILEIO: [%s] Failed to open file", fileName);
     }
     else TRACELOG(LOG_WARNING, "FILEIO: File name provided is not valid");
+    
+    return success;
 }
 
 // Load text data from file, returns a '\0' terminated string
@@ -270,8 +275,10 @@ char *LoadFileText(const char *fileName)
 }
 
 // Save text data to file (write), string must be '\0' terminated
-void SaveFileText(const char *fileName, char *text)
+bool SaveFileText(const char *fileName, char *text)
 {
+    bool success = false;
+    
     if (fileName != NULL)
     {
         FILE *file = fopen(fileName, "wt");
@@ -280,14 +287,17 @@ void SaveFileText(const char *fileName, char *text)
         {
             int count = fprintf(file, "%s", text);
 
-            if (count == 0) TRACELOG(LOG_WARNING, "FILEIO: [%s] Failed to write text file", fileName);
+            if (count < 0) TRACELOG(LOG_WARNING, "FILEIO: [%s] Failed to write text file", fileName);
             else TRACELOG(LOG_INFO, "FILEIO: [%s] Text file saved successfully", fileName);
 
-            fclose(file);
+            int result = fclose(file);
+            if (result == 0) success = true;
         }
         else TRACELOG(LOG_WARNING, "FILEIO: [%s] Failed to open text file", fileName);
     }
     else TRACELOG(LOG_WARNING, "FILEIO: File name provided is not valid");
+    
+    return success;
 }
 
 #if defined(PLATFORM_ANDROID)
@@ -317,7 +327,7 @@ FILE *android_fopen(const char *fileName, const char *mode)
         // NOTE: AAsset provides access to read-only asset
         AAsset *asset = AAssetManager_open(assetManager, fileName, AASSET_MODE_UNKNOWN);
 
-        if (asset != NULL) 
+        if (asset != NULL)
         {
             // Return pointer to file in the assets
             return funopen(asset, android_read, android_write, android_seek, android_close);

@@ -1,6 +1,6 @@
 /**********************************************************************************************
 *
-*   raudio - A simple and easy-to-use audio library based on miniaudio
+*   raudio v1.0 - A simple and easy-to-use audio library based on miniaudio
 *
 *   FEATURES:
 *       - Manage audio device (init/close)
@@ -159,6 +159,9 @@ typedef struct tagBITMAPINFOHEADER {
 #define MA_FREE RL_FREE
 
 #define MA_NO_JACK
+#define MA_NO_WAV
+#define MA_NO_FLAC
+#define MA_NO_MP3
 #define MINIAUDIO_IMPLEMENTATION
 #include "external/miniaudio.h"         // miniaudio library
 #undef PlaySound                        // Win32 API: windows.h > mmsystem.h defines PlaySound macro
@@ -171,6 +174,20 @@ typedef struct tagBITMAPINFOHEADER {
 
     #if !defined(TRACELOG)
         #define TRACELOG(level, ...) (void)0
+    #endif
+
+    // Allow custom memory allocators
+    #ifndef RL_MALLOC
+        #define RL_MALLOC(sz)       malloc(sz)
+    #endif
+    #ifndef RL_CALLOC
+        #define RL_CALLOC(n,sz)     calloc(n,sz)
+    #endif
+    #ifndef RL_REALLOC
+        #define RL_REALLOC(ptr,sz)  realloc(ptr,sz)
+    #endif
+    #ifndef RL_FREE
+        #define RL_FREE(ptr)        free(ptr)
     #endif
 #endif
 
@@ -244,6 +261,10 @@ typedef struct tagBITMAPINFOHEADER {
 #ifndef MAX_AUDIO_BUFFER_POOL_CHANNELS
     #define MAX_AUDIO_BUFFER_POOL_CHANNELS    16    // Audio pool channels
 #endif
+#ifndef DEFAULT_AUDIO_BUFFER_SIZE
+    #define DEFAULT_AUDIO_BUFFER_SIZE       4096    // Default audio buffer size
+#endif
+
 
 //----------------------------------------------------------------------------------
 // Types and Structures Definition
@@ -335,7 +356,7 @@ static AudioData AUDIO = {          // Global AUDIO context
     // After some math, considering a sampleRate of 48000, a buffer refill rate of 1/60 seconds and a
     // standard double-buffering system, a 4096 samples buffer has been chosen, it should be enough
     // In case of music-stalls, just increase this number
-    .Buffer.defaultSize = 4096
+    .Buffer.defaultSize = DEFAULT_AUDIO_BUFFER_SIZE
 };
 
 //----------------------------------------------------------------------------------
@@ -349,22 +370,24 @@ static void InitAudioBufferPool(void);                  // Initialise the multic
 static void CloseAudioBufferPool(void);                 // Close the audio buffers pool
 
 #if defined(SUPPORT_FILEFORMAT_WAV)
-static Wave LoadWAV(const char *fileName);              // Load WAV file
+static Wave LoadWAV(const unsigned char *fileData, unsigned int fileSize);   // Load WAV file
 static int SaveWAV(Wave wave, const char *fileName);    // Save wave data as WAV file
 #endif
 #if defined(SUPPORT_FILEFORMAT_OGG)
-static Wave LoadOGG(const char *fileName);              // Load OGG file
+static Wave LoadOGG(const unsigned char *fileData, unsigned int fileSize);   // Load OGG file
 #endif
 #if defined(SUPPORT_FILEFORMAT_FLAC)
-static Wave LoadFLAC(const char *fileName);             // Load FLAC file
+static Wave LoadFLAC(const unsigned char *fileData, unsigned int fileSize);  // Load FLAC file
 #endif
 #if defined(SUPPORT_FILEFORMAT_MP3)
-static Wave LoadMP3(const char *fileName);              // Load MP3 file
+static Wave LoadMP3(const unsigned char *fileData, unsigned int fileSize);   // Load MP3 file
 #endif
 
 #if defined(RAUDIO_STANDALONE)
 static bool IsFileExtension(const char *fileName, const char *ext); // Check file extension
-static void SaveFileText(const char *fileName, char *text);         // Save text data to file (write), string must be '\0' terminated
+static unsigned char *LoadFileData(const char *fileName, unsigned int *bytesRead);     // Load file data as byte array (read)
+static bool SaveFileData(const char *fileName, void *data, unsigned int bytesToWrite); // Save data to file from byte array (write)
+static bool SaveFileText(const char *fileName, char *text);         // Save text data to file (write), string must be '\0' terminated
 #endif
 
 //----------------------------------------------------------------------------------
@@ -437,7 +460,7 @@ void InitAudioDevice(void)
 
     // Mixing happens on a seperate thread which means we need to synchronize. I'm using a mutex here to make things simple, but may
     // want to look at something a bit smarter later on to keep everything real-time, if that's necessary.
-    if (ma_mutex_init(&AUDIO.System.context, &AUDIO.System.lock) != MA_SUCCESS)
+    if (ma_mutex_init(&AUDIO.System.lock) != MA_SUCCESS)
     {
         TRACELOG(LOG_ERROR, "AUDIO: Failed to create mutex for mixing");
         ma_device_uninit(&AUDIO.System.device);
@@ -667,20 +690,43 @@ Wave LoadWave(const char *fileName)
 {
     Wave wave = { 0 };
 
+    // Loading file to memory
+    unsigned int fileSize = 0;
+    unsigned char *fileData = LoadFileData(fileName, &fileSize);
+
+    if (fileData != NULL)
+    {
+        // Loading wave from memory data
+        wave = LoadWaveFromMemory(GetFileExtension(fileName), fileData, fileSize);
+
+        RL_FREE(fileData);
+    }
+
+    return wave;
+}
+
+// Load wave from memory buffer, fileType refers to extension: i.e. "wav"
+Wave LoadWaveFromMemory(const char *fileType, const unsigned char *fileData, int dataSize)
+{
+    Wave wave = { 0 };
+
+    char fileExtLower[16] = { 0 };
+    strcpy(fileExtLower, TextToLower(fileType));
+
     if (false) { }
 #if defined(SUPPORT_FILEFORMAT_WAV)
-    else if (IsFileExtension(fileName, ".wav")) wave = LoadWAV(fileName);
+    else if (TextIsEqual(fileExtLower, "wav")) wave = LoadWAV(fileData, dataSize);
 #endif
 #if defined(SUPPORT_FILEFORMAT_OGG)
-    else if (IsFileExtension(fileName, ".ogg")) wave = LoadOGG(fileName);
+    else if (TextIsEqual(fileExtLower, "ogg")) wave = LoadOGG(fileData, dataSize);
 #endif
 #if defined(SUPPORT_FILEFORMAT_FLAC)
-    else if (IsFileExtension(fileName, ".flac")) wave = LoadFLAC(fileName);
+    else if (TextIsEqual(fileExtLower, "flac")) wave = LoadFLAC(fileData, dataSize);
 #endif
 #if defined(SUPPORT_FILEFORMAT_MP3)
-    else if (IsFileExtension(fileName, ".mp3")) wave = LoadMP3(fileName);
+    else if (TextIsEqual(fileExtLower, "mp3")) wave = LoadMP3(fileData, dataSize);
 #endif
-    else TRACELOG(LOG_WARNING, "FILEIO: [%s] File format not supported", fileName);
+    else TRACELOG(LOG_WARNING, "WAVE: File format not supported");
 
     return wave;
 }
@@ -766,7 +812,7 @@ void UpdateSound(Sound sound, const void *data, int samplesCount)
 }
 
 // Export wave data to file
-void ExportWave(Wave wave, const char *fileName)
+bool ExportWave(Wave wave, const char *fileName)
 {
     bool success = false;
 
@@ -778,17 +824,20 @@ void ExportWave(Wave wave, const char *fileName)
     {
         // Export raw sample data (without header)
         // NOTE: It's up to the user to track wave parameters
-        SaveFileData(fileName, wave.data, wave.sampleCount*wave.channels*wave.sampleSize/8);
-        success = true;
+        success = SaveFileData(fileName, wave.data, wave.sampleCount*wave.sampleSize/8);
     }
 
     if (success) TRACELOG(LOG_INFO, "FILEIO: [%s] Wave data exported successfully", fileName);
     else TRACELOG(LOG_WARNING, "FILEIO: [%s] Failed to export wave data", fileName);
+    
+    return success;
 }
 
 // Export wave sample data to code (.h)
-void ExportWaveAsCode(Wave wave, const char *fileName)
+bool ExportWaveAsCode(Wave wave, const char *fileName)
 {
+    bool success = false;
+    
 #ifndef TEXT_BYTES_PER_LINE
     #define TEXT_BYTES_PER_LINE     20
 #endif
@@ -832,9 +881,11 @@ void ExportWaveAsCode(Wave wave, const char *fileName)
     bytesCount += sprintf(txtData + bytesCount, "0x%x };\n", ((unsigned char *)wave.data)[waveDataSize - 1]);
 
     // NOTE: Text data length exported is determined by '\0' (NULL) character
-    SaveFileText(fileName, txtData);
+    success = SaveFileText(fileName, txtData);
 
     RL_FREE(txtData);
+    
+    return success;
 }
 
 // Play a sound
@@ -961,10 +1012,10 @@ void SetSoundPitch(Sound sound, float pitch)
 // Convert wave data to desired format
 void WaveFormat(Wave *wave, int sampleRate, int sampleSize, int channels)
 {
-    ma_format formatIn  = ((wave->sampleSize == 8)? ma_format_u8 : ((wave->sampleSize == 16)? ma_format_s16 : ma_format_f32));
-    ma_format formatOut = ((      sampleSize == 8)? ma_format_u8 : ((      sampleSize == 16)? ma_format_s16 : ma_format_f32));
+    ma_format formatIn = ((wave->sampleSize == 8)? ma_format_u8 : ((wave->sampleSize == 16)? ma_format_s16 : ma_format_f32));
+    ma_format formatOut = ((sampleSize == 8)? ma_format_u8 : ((sampleSize == 16)? ma_format_s16 : ma_format_f32));
 
-    ma_uint32 frameCountIn = wave->sampleCount;  // Is wave->sampleCount actually the frame count? That terminology needs to change, if so.
+    ma_uint32 frameCountIn = wave->sampleCount/wave->channels;
 
     ma_uint32 frameCount = (ma_uint32)ma_convert_frames(NULL, 0, formatOut, channels, sampleRate, NULL, frameCountIn, formatIn, wave->channels, wave->sampleRate);
     if (frameCount == 0)
@@ -982,7 +1033,7 @@ void WaveFormat(Wave *wave, int sampleRate, int sampleSize, int channels)
         return;
     }
 
-    wave->sampleCount = frameCount;
+    wave->sampleCount = frameCount*channels;
     wave->sampleSize = sampleSize;
     wave->sampleRate = sampleRate;
     wave->channels = channels;
@@ -995,12 +1046,12 @@ Wave WaveCopy(Wave wave)
 {
     Wave newWave = { 0 };
 
-    newWave.data = RL_MALLOC(wave.sampleCount*wave.sampleSize/8*wave.channels);
+    newWave.data = RL_MALLOC(wave.sampleCount*wave.sampleSize/8);
 
     if (newWave.data != NULL)
     {
         // NOTE: Size must be provided in bytes
-        memcpy(newWave.data, wave.data, wave.sampleCount*wave.channels*wave.sampleSize/8);
+        memcpy(newWave.data, wave.data, wave.sampleCount*wave.sampleSize/8);
 
         newWave.sampleCount = wave.sampleCount;
         newWave.sampleRate = wave.sampleRate;
@@ -1020,9 +1071,9 @@ void WaveCrop(Wave *wave, int initSample, int finalSample)
     {
         int sampleCount = finalSample - initSample;
 
-        void *data = RL_MALLOC(sampleCount*wave->sampleSize/8*wave->channels);
+        void *data = RL_MALLOC(sampleCount*wave->sampleSize/8);
 
-        memcpy(data, (unsigned char *)wave->data + (initSample*wave->channels*wave->sampleSize/8), sampleCount*wave->channels*wave->sampleSize/8);
+        memcpy(data, (unsigned char *)wave->data + (initSample*wave->channels*wave->sampleSize/8), sampleCount*wave->sampleSize/8);
 
         RL_FREE(wave->data);
         wave->data = data;
@@ -1034,16 +1085,15 @@ void WaveCrop(Wave *wave, int initSample, int finalSample)
 // NOTE: Returned sample values are normalized to range [-1..1]
 float *GetWaveData(Wave wave)
 {
-    float *samples = (float *)RL_MALLOC(wave.sampleCount*wave.channels*sizeof(float));
+    float *samples = (float *)RL_MALLOC(wave.sampleCount*sizeof(float));
 
+    // NOTE: sampleCount is the total number of interlaced samples (including channels)
+    
     for (unsigned int i = 0; i < wave.sampleCount; i++)
     {
-        for (unsigned int j = 0; j < wave.channels; j++)
-        {
-            if (wave.sampleSize == 8) samples[wave.channels*i + j] = (float)(((unsigned char *)wave.data)[wave.channels*i + j] - 127)/256.0f;
-            else if (wave.sampleSize == 16) samples[wave.channels*i + j] = (float)((short *)wave.data)[wave.channels*i + j]/32767.0f;
-            else if (wave.sampleSize == 32) samples[wave.channels*i + j] = ((float *)wave.data)[wave.channels*i + j];
-        }
+            if (wave.sampleSize == 8) samples[i] = (float)(((unsigned char *)wave.data)[i] - 127)/256.0f;
+            else if (wave.sampleSize == 16) samples[i] = (float)(((short *)wave.data)[i])/32767.0f;
+            else if (wave.sampleSize == 32) samples[i] = ((float *)wave.data)[i];
     }
 
     return samples;
@@ -1071,7 +1121,10 @@ Music LoadMusicStream(const char *fileName)
             music.ctxType = MUSIC_AUDIO_WAV;
             music.ctxData = ctxWav;
 
-            music.stream = InitAudioStream(ctxWav->sampleRate, ctxWav->bitsPerSample, ctxWav->channels);
+            int sampleSize = ctxWav->bitsPerSample;
+            if (ctxWav->bitsPerSample == 24) sampleSize = 16;   // Forcing conversion to s16 on UpdateMusicStream()
+
+            music.stream = InitAudioStream(ctxWav->sampleRate, sampleSize, ctxWav->channels);
             music.sampleCount = (unsigned int)ctxWav->totalPCMFrameCount*ctxWav->channels;
             music.looping = true;   // Looping enabled by default
             musicLoaded = true;
@@ -1091,6 +1144,8 @@ Music LoadMusicStream(const char *fileName)
 
             // OGG bit rate defaults to 16 bit, it's enough for compressed format
             music.stream = InitAudioStream(info.sample_rate, 16, info.channels);
+            
+            // WARNING: It seems this function returns length in frames, not samples, so we multiply by channels
             music.sampleCount = (unsigned int)stb_vorbis_stream_length_in_samples((stb_vorbis *)music.ctxData)*info.channels;
             music.looping = true;   // Looping enabled by default
             musicLoaded = true;
@@ -1100,7 +1155,7 @@ Music LoadMusicStream(const char *fileName)
 #if defined(SUPPORT_FILEFORMAT_FLAC)
     else if (IsFileExtension(fileName, ".flac"))
     {
-        music.ctxData = drflac_open_file(fileName);
+        music.ctxData = drflac_open_file(fileName, NULL);
 
         if (music.ctxData != NULL)
         {
@@ -1108,7 +1163,7 @@ Music LoadMusicStream(const char *fileName)
             drflac *ctxFlac = (drflac *)music.ctxData;
 
             music.stream = InitAudioStream(ctxFlac->sampleRate, ctxFlac->bitsPerSample, ctxFlac->channels);
-            music.sampleCount = (unsigned int)ctxFlac->totalSampleCount;
+            music.sampleCount = (unsigned int)ctxFlac->totalPCMFrameCount*ctxFlac->channels;
             music.looping = true;   // Looping enabled by default
             musicLoaded = true;
         }
@@ -1147,7 +1202,7 @@ Music LoadMusicStream(const char *fileName)
 
             // NOTE: Only stereo is supported for XM
             music.stream = InitAudioStream(48000, 16, 2);
-            music.sampleCount = (unsigned int)jar_xm_get_remaining_samples(ctxXm)*2;
+            music.sampleCount = (unsigned int)jar_xm_get_remaining_samples(ctxXm)*2;    // 2 channels
             music.looping = true;   // Looping enabled by default
             jar_xm_reset(ctxXm);   // make sure we start at the beginning of the song
             musicLoaded = true;
@@ -1170,7 +1225,7 @@ Music LoadMusicStream(const char *fileName)
 
             // NOTE: Only stereo is supported for MOD
             music.stream = InitAudioStream(48000, 16, 2);
-            music.sampleCount = (unsigned int)jar_mod_max_samples(ctxMod)*2;
+            music.sampleCount = (unsigned int)jar_mod_max_samples(ctxMod)*2;    // 2 channels
             music.looping = true;   // Looping enabled by default
             musicLoaded = true;
 
@@ -1179,7 +1234,7 @@ Music LoadMusicStream(const char *fileName)
     }
 #endif
     else TRACELOG(LOG_WARNING, "STREAM: [%s] Fileformat not supported", fileName);
-    
+
     if (!musicLoaded)
     {
         if (false) { }
@@ -1190,7 +1245,7 @@ Music LoadMusicStream(const char *fileName)
         else if (music.ctxType == MUSIC_AUDIO_OGG) stb_vorbis_close((stb_vorbis *)music.ctxData);
     #endif
     #if defined(SUPPORT_FILEFORMAT_FLAC)
-        else if (music.ctxType == MUSIC_AUDIO_FLAC) drflac_free((drflac *)music.ctxData);
+        else if (music.ctxType == MUSIC_AUDIO_FLAC) drflac_free((drflac *)music.ctxData, NULL);
     #endif
     #if defined(SUPPORT_FILEFORMAT_MP3)
         else if (music.ctxType == MUSIC_AUDIO_MP3) { drmp3_uninit((drmp3 *)music.ctxData); RL_FREE(music.ctxData); }
@@ -1230,7 +1285,7 @@ void UnloadMusicStream(Music music)
     else if (music.ctxType == MUSIC_AUDIO_OGG) stb_vorbis_close((stb_vorbis *)music.ctxData);
 #endif
 #if defined(SUPPORT_FILEFORMAT_FLAC)
-    else if (music.ctxType == MUSIC_AUDIO_FLAC) drflac_free((drflac *)music.ctxData);
+    else if (music.ctxType == MUSIC_AUDIO_FLAC) drflac_free((drflac *)music.ctxData, NULL);
 #endif
 #if defined(SUPPORT_FILEFORMAT_MP3)
     else if (music.ctxType == MUSIC_AUDIO_MP3) { drmp3_uninit((drmp3 *)music.ctxData); RL_FREE(music.ctxData); }
@@ -1328,7 +1383,8 @@ void UpdateMusicStream(Music music)
             case MUSIC_AUDIO_WAV:
             {
                 // NOTE: Returns the number of samples to process (not required)
-                drwav_read_pcm_frames_s16((drwav *)music.ctxData, samplesCount/music.stream.channels, (short *)pcm);
+                if (music.stream.sampleSize == 16) drwav_read_pcm_frames_s16((drwav *)music.ctxData, samplesCount/music.stream.channels, (short *)pcm);
+                else if (music.stream.sampleSize == 32) drwav_read_pcm_frames_f32((drwav *)music.ctxData, samplesCount/music.stream.channels, (float *)pcm);
 
             } break;
         #endif
@@ -1443,7 +1499,7 @@ float GetMusicTimePlayed(Music music)
     {
         //ma_uint32 frameSizeInBytes = ma_get_bytes_per_sample(music.stream.buffer->dsp.formatConverterIn.config.formatIn)*music.stream.buffer->dsp.formatConverterIn.config.channels;
         unsigned int samplesPlayed = music.stream.buffer->totalFramesProcessed*music.stream.channels;
-        secondsPlayed = (float)samplesPlayed / (music.stream.sampleRate*music.stream.channels);
+        secondsPlayed = (float)samplesPlayed/(music.stream.sampleRate*music.stream.channels);
     }
 
     return secondsPlayed;
@@ -1850,7 +1906,7 @@ static void InitAudioBufferPool(void)
         // WARNING: An empty audioBuffer is created (data = 0)
         AUDIO.MultiChannel.pool[i] = LoadAudioBuffer(AUDIO_DEVICE_FORMAT, AUDIO_DEVICE_CHANNELS, AUDIO_DEVICE_SAMPLE_RATE, 0, AUDIO_BUFFER_USAGE_STATIC);
     }
-    
+
     // TODO: Verification required for log
     TRACELOG(LOG_INFO, "AUDIO: Multichannel pool size: %i", MAX_AUDIO_BUFFER_POOL_CHANNELS);
 }
@@ -1862,159 +1918,145 @@ static void CloseAudioBufferPool(void)
 }
 
 #if defined(SUPPORT_FILEFORMAT_WAV)
-// Load WAV file into Wave structure
-static Wave LoadWAV(const char *fileName)
+// Load WAV file data into Wave structure
+// NOTE: Using dr_wav library
+static Wave LoadWAV(const unsigned char *fileData, unsigned int fileSize)
 {
     Wave wave = { 0 };
-
-    // Decode an entire WAV file in one go
-    unsigned long long int totalPCMFrameCount = 0;
-    wave.data = drwav_open_file_and_read_pcm_frames_s16(fileName, &wave.channels, &wave.sampleRate, &totalPCMFrameCount, NULL);
-
-    if (wave.data == NULL) TRACELOG(LOG_WARNING, "FILEIO: [%s] Failed to load WAV data", fileName);
-    else
-    {
-        wave.sampleCount = (unsigned int)totalPCMFrameCount*wave.channels;
-        wave.sampleSize = 16;
-
-        TRACELOG(LOG_INFO, "WAVE: [%s] WAV file loaded successfully (%i Hz, %i bit, %s)", fileName, wave.sampleRate, wave.sampleSize, (wave.channels == 1)? "Mono" : "Stereo");
-    }
-    
-/*
-    // Loading WAV from memory to avoid FILE accesses
-    unsigned int fileSize = 0;
-    unsigned char *fileData = LoadFileData(fileName, &fileSize);
-    
     drwav wav = { 0 };
-    
+
     bool success = drwav_init_memory(&wav, fileData, fileSize, NULL);
-    
+
     if (success)
     {
-        wave.sampleCount = wav.totalPCMFrameCount*wav.channels;
+        wave.sampleCount = (unsigned int)wav.totalPCMFrameCount*wav.channels;
         wave.sampleRate = wav.sampleRate;
         wave.sampleSize = 16;   // NOTE: We are forcing conversion to 16bit
         wave.channels = wav.channels;
         wave.data = (short *)RL_MALLOC(wave.sampleCount*sizeof(short));
         drwav_read_pcm_frames_s16(&wav, wav.totalPCMFrameCount, wave.data);
     }
-    else TRACELOG(LOG_WARNING, "FILEIO: [%s] Failed to load WAV data", fileName);
-    
+    else TRACELOG(LOG_WARNING, "WAVE: Failed to load WAV data");
+
     drwav_uninit(&wav);
-    RL_FREE(fileData);
-*/
+
     return wave;
 }
 
 // Save wave data as WAV file
+// NOTE: Using dr_wav library
 static int SaveWAV(Wave wave, const char *fileName)
 {
+    int success = false;
+    
     drwav wav = { 0 };
     drwav_data_format format = { 0 };
-    format.container = drwav_container_riff;     // <-- drwav_container_riff = normal WAV files, drwav_container_w64 = Sony Wave64.
-    format.format = DR_WAVE_FORMAT_PCM;          // <-- Any of the DR_WAVE_FORMAT_* codes.
+    format.container = drwav_container_riff;
+    format.format = DR_WAVE_FORMAT_PCM;
     format.channels = wave.channels;
     format.sampleRate = wave.sampleRate;
     format.bitsPerSample = wave.sampleSize;
+
+    unsigned char *fileData = NULL;
+    size_t fileDataSize = 0;
+    success = drwav_init_memory_write(&wav, &fileData, &fileDataSize, &format, NULL);
+    if (success) success = (int)drwav_write_pcm_frames(&wav, wave.sampleCount/wave.channels, wave.data);
+    drwav_result result = drwav_uninit(&wav);
     
-    drwav_init_file_write(&wav, fileName, &format, NULL);
-    //drwav_init_memory_write(&wav, &fileData, &fileDataSize, &format, NULL);       // Memory version
-    drwav_write_pcm_frames(&wav, wave.sampleCount/wave.channels, wave.data);
+    if (result == DRWAV_SUCCESS) success = SaveFileData(fileName, fileData, (unsigned int)fileDataSize);
     
-    drwav_uninit(&wav);
-    
-    // SaveFileData(fileName, fileData, fileDataSize);
-    //drwav_free(fileData, NULL);
-    
-    return true;
+    drwav_free(fileData, NULL);
+
+    return success;
 }
 #endif
 
 #if defined(SUPPORT_FILEFORMAT_OGG)
-// Load OGG file into Wave structure
+// Load OGG file data into Wave structure
 // NOTE: Using stb_vorbis library
-static Wave LoadOGG(const char *fileName)
+static Wave LoadOGG(const unsigned char *fileData, unsigned int fileSize)
 {
     Wave wave = { 0 };
 
-    stb_vorbis *oggFile = stb_vorbis_open_filename(fileName, NULL, NULL);
+    stb_vorbis *oggData = stb_vorbis_open_memory((unsigned char *)fileData, fileSize, NULL, NULL);
 
-    if (oggFile == NULL) TRACELOG(LOG_WARNING, "FILEIO: [%s] Failed to open OGG file", fileName);
-    else
+    if (oggData != NULL)
     {
-        stb_vorbis_info info = stb_vorbis_get_info(oggFile);
+        stb_vorbis_info info = stb_vorbis_get_info(oggData);
 
         wave.sampleRate = info.sample_rate;
         wave.sampleSize = 16;                   // 16 bit per sample (short)
         wave.channels = info.channels;
-        wave.sampleCount = (unsigned int)stb_vorbis_stream_length_in_samples(oggFile)*info.channels;  // Independent by channel
+        wave.sampleCount = (unsigned int)stb_vorbis_stream_length_in_samples(oggData)*info.channels;  // Independent by channel
 
-        float totalSeconds = stb_vorbis_stream_length_in_seconds(oggFile);
-        if (totalSeconds > 10) TRACELOG(LOG_WARNING, "WAVE: [%s] Ogg audio length larger than 10 seconds (%f), that's a big file in memory, consider music streaming", fileName, totalSeconds);
+        float totalSeconds = stb_vorbis_stream_length_in_seconds(oggData);
+        if (totalSeconds > 10) TRACELOG(LOG_WARNING, "WAVE: OGG audio length larger than 10 seconds (%f sec.), that's a big file in memory, consider music streaming", totalSeconds);
 
-        wave.data = (short *)RL_MALLOC(wave.sampleCount*wave.channels*sizeof(short));
+        wave.data = (short *)RL_MALLOC(wave.sampleCount*sizeof(short));
 
         // NOTE: Returns the number of samples to process (be careful! we ask for number of shorts!)
-        stb_vorbis_get_samples_short_interleaved(oggFile, info.channels, (short *)wave.data, wave.sampleCount*wave.channels);
-        TRACELOG(LOG_INFO, "WAVE: [%s] OGG file loaded successfully (%i Hz, %i bit, %s)", fileName, wave.sampleRate, wave.sampleSize, (wave.channels == 1)? "Mono" : "Stereo");
+        stb_vorbis_get_samples_short_interleaved(oggData, info.channels, (short *)wave.data, wave.sampleCount);
+        TRACELOG(LOG_INFO, "WAVE: OGG data loaded successfully (%i Hz, %i bit, %s)", wave.sampleRate, wave.sampleSize, (wave.channels == 1)? "Mono" : "Stereo");
 
-        stb_vorbis_close(oggFile);
+        stb_vorbis_close(oggData);
     }
+    else TRACELOG(LOG_WARNING, "WAVE: Failed to load OGG data");
 
     return wave;
 }
 #endif
 
 #if defined(SUPPORT_FILEFORMAT_FLAC)
-// Load FLAC file into Wave structure
+// Load FLAC file data into Wave structure
 // NOTE: Using dr_flac library
-static Wave LoadFLAC(const char *fileName)
+static Wave LoadFLAC(const unsigned char *fileData, unsigned int fileSize)
 {
     Wave wave = { 0 };
 
-    // Decode an entire FLAC file in one go
-    unsigned long long int totalSampleCount = 0;
-    wave.data = drflac_open_file_and_read_pcm_frames_s16(fileName, &wave.channels, &wave.sampleRate, &totalSampleCount);
+    // Decode the entire FLAC file in one go
+    unsigned long long int totalFrameCount = 0;
+    wave.data = drflac_open_memory_and_read_pcm_frames_s16(fileData, fileSize, &wave.channels, &wave.sampleRate, &totalFrameCount, NULL);
 
-    if (wave.data == NULL) TRACELOG(LOG_WARNING, "FILEIO: [%s] Failed to load FLAC data", fileName);
-    else
+    if (wave.data != NULL)
     {
-        wave.sampleCount = (unsigned int)totalSampleCount;
+        wave.sampleCount = (unsigned int)totalFrameCount*wave.channels;
         wave.sampleSize = 16;
 
-        TRACELOG(LOG_INFO, "WAVE: [%s] FLAC file loaded successfully (%i Hz, %i bit, %s)", fileName, wave.sampleRate, wave.sampleSize, (wave.channels == 1)? "Mono" : "Stereo");
+        TRACELOG(LOG_INFO, "WAVE: FLAC data loaded successfully (%i Hz, %i bit, %s)", wave.sampleRate, wave.sampleSize, (wave.channels == 1)? "Mono" : "Stereo");
     }
- 
+    else TRACELOG(LOG_WARNING, "WAVE: Failed to load FLAC data");
+
     return wave;
 }
 #endif
 
 #if defined(SUPPORT_FILEFORMAT_MP3)
-// Load MP3 file into Wave structure
+// Load MP3 file data into Wave structure
 // NOTE: Using dr_mp3 library
-static Wave LoadMP3(const char *fileName)
+static Wave LoadMP3(const unsigned char *fileData, unsigned int fileSize)
 {
     Wave wave = { 0 };
-
-    // Decode an entire MP3 file in one go
-    unsigned long long int totalFrameCount = 0;
     drmp3_config config = { 0 };
-    wave.data = drmp3_open_file_and_read_f32(fileName, &config, &totalFrameCount);
 
-    if (wave.data == NULL) TRACELOG(LOG_WARNING, "FILEIO: [%s] Failed to load MP3 data", fileName);
-    else
+    // Decode the entire MP3 file in one go
+    unsigned long long int totalFrameCount = 0;
+    wave.data = drmp3_open_memory_and_read_pcm_frames_f32(fileData, fileSize, &config, &totalFrameCount, NULL);
+
+    if (wave.data != NULL)
     {
-        wave.channels = config.outputChannels;
-        wave.sampleRate = config.outputSampleRate;
+        wave.channels = config.channels;
+        wave.sampleRate = config.sampleRate;
         wave.sampleCount = (int)totalFrameCount*wave.channels;
         wave.sampleSize = 32;
 
         // NOTE: Only support up to 2 channels (mono, stereo)
-        if (wave.channels > 2) TRACELOG(LOG_WARNING, "WAVE: [%s] MP3 channels number (%i) not supported", fileName, wave.channels);
+        // TODO: Really?
+        if (wave.channels > 2) TRACELOG(LOG_WARNING, "WAVE: MP3 channels number (%i) not supported", wave.channels);
 
-        TRACELOG(LOG_INFO, "WAVE: [%s] MP3 file loaded successfully (%i Hz, %i bit, %s)", fileName, wave.sampleRate, wave.sampleSize, (wave.channels == 1)? "Mono" : "Stereo");
+        TRACELOG(LOG_INFO, "WAVE: MP3 file loaded successfully (%i Hz, %i bit, %s)", wave.sampleRate, wave.sampleSize, (wave.channels == 1)? "Mono" : "Stereo");
     }
-    
+    else TRACELOG(LOG_WARNING, "WAVE: Failed to load MP3 data");
+
     return wave;
 }
 #endif
@@ -2035,8 +2077,70 @@ static bool IsFileExtension(const char *fileName, const char *ext)
     return result;
 }
 
+// Load data from file into a buffer
+static unsigned char *LoadFileData(const char *fileName, unsigned int *bytesRead)
+{
+    unsigned char *data = NULL;
+    *bytesRead = 0;
+
+    if (fileName != NULL)
+    {
+        FILE *file = fopen(fileName, "rb");
+
+        if (file != NULL)
+        {
+            // WARNING: On binary streams SEEK_END could not be found,
+            // using fseek() and ftell() could not work in some (rare) cases
+            fseek(file, 0, SEEK_END);
+            int size = ftell(file);
+            fseek(file, 0, SEEK_SET);
+
+            if (size > 0)
+            {
+                data = (unsigned char *)RL_MALLOC(size*sizeof(unsigned char));
+
+                // NOTE: fread() returns number of read elements instead of bytes, so we read [1 byte, size elements]
+                unsigned int count = (unsigned int)fread(data, sizeof(unsigned char), size, file);
+                *bytesRead = count;
+
+                if (count != size) TRACELOG(LOG_WARNING, "FILEIO: [%s] File partially loaded", fileName);
+                else TRACELOG(LOG_INFO, "FILEIO: [%s] File loaded successfully", fileName);
+            }
+            else TRACELOG(LOG_WARNING, "FILEIO: [%s] Failed to read file", fileName);
+
+            fclose(file);
+        }
+        else TRACELOG(LOG_WARNING, "FILEIO: [%s] Failed to open file", fileName);
+    }
+    else TRACELOG(LOG_WARNING, "FILEIO: File name provided is not valid");
+
+    return data;
+}
+
+// Save data to file from buffer
+static bool SaveFileData(const char *fileName, void *data, unsigned int bytesToWrite)
+{
+    if (fileName != NULL)
+    {
+        FILE *file = fopen(fileName, "wb");
+
+        if (file != NULL)
+        {
+            unsigned int count = (unsigned int)fwrite(data, sizeof(unsigned char), bytesToWrite, file);
+
+            if (count == 0) TRACELOG(LOG_WARNING, "FILEIO: [%s] Failed to write file", fileName);
+            else if (count != bytesToWrite) TRACELOG(LOG_WARNING, "FILEIO: [%s] File partially written", fileName);
+            else TRACELOG(LOG_INFO, "FILEIO: [%s] File saved successfully", fileName);
+
+            fclose(file);
+        }
+        else TRACELOG(LOG_WARNING, "FILEIO: [%s] Failed to open file", fileName);
+    }
+    else TRACELOG(LOG_WARNING, "FILEIO: File name provided is not valid");
+}
+
 // Save text data to file (write), string must be '\0' terminated
-static void SaveFileText(const char *fileName, char *text)
+static bool SaveFileText(const char *fileName, char *text)
 {
     if (fileName != NULL)
     {
